@@ -1,0 +1,590 @@
+---
+title: "Final Model Cluster 1, Group 2"
+author: "Leo Yao"
+date: "2023-07-24"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Libraries
+```{r}
+library(tidyverse)
+library(glmnet)
+library(gtsummary)
+library(rsample)
+library(ggplot2)
+library(neuralnet)
+library(keras)
+library(tensorflow)
+library(randomForest)
+library(caret)
+library(dplyr)
+```
+
+Populations
+```{r}
+alzheimer_data <- read.csv("alzheimer_data.csv")
+alzheimer_data <- alzheimer_data %>% rename(gender = female)
+#alzheimer_data <- alzheimer_data %>% rename(female = gender)
+alzheimer_data <- alzheimer_data %>% mutate(alz_sym = case_when(diagnosis < 1 ~ 0, bpsys >= 1 ~ 1))
+
+glimpse(alzheimer_data)
+
+head(alzheimer_data)
+
+#range(alzheimer_data$frcort) #spread is significantly smaller, and the range is way smaller
+#range(alzheimer_data$naccicv)
+
+no_alz <- alzheimer_data %>% filter(diagnosis < 1)
+var(no_alz$naccicv) #17651.06
+#var(alz_true$naccicv) #18850.54
+#create some sort of filter ig
+alz_true <- alzheimer_data %>% filter(diagnosis >= 1)
+
+var(alzheimer_data$naccicv)
+range(alzheimer_data$naccicv)[2] - range(alzheimer_data$naccicv)[1]
+
+alzheimer_data$diagnosis <- as.factor(alzheimer_data$diagnosis)
+alzheimer_data <- alzheimer_data %>% mutate(GMratio = (lhippo + rhippo + frcort + lparcort + rparcort + ltempcor + rtempcor + lcac + rcac + lent + rent + lparhip + rparhip + lposcin + rposcin) / naccicv) #added 10/24/24 to ensure that the entire file compiles at once.
+
+ggplot(data = alzheimer_data, aes(x = diagnosis, y = GMratio, fill = diagnosis)) + geom_boxplot() + scale_fill_manual(values = c("black", "pink", "lightblue")) + labs(x = "Diagnosis", y = "Ratio of Grey Matter to Total Volume", title = "Boxplots of Grey Matter Ratio between Diagnoses")
+```
+LASSO total
+```{r}
+set.seed(0)
+xT = data.matrix(alzheimer_data[, c("bpsys", "bpdias", "height", "age", "motsev", "appsev", "weight")])
+yT = alzheimer_data$GMratio
+#2.200829
+#2.199581
+
+cv_model_T <- cv.glmnet(xT, yT, alpha = 1)
+best_lambda_T <- cv_model_T$lambda.min
+
+best_model_T <- glmnet(xT, yT, alpha = 1, lambda = best_lambda_T)
+y_predicted_T <- predict(best_model_T, s = best_lambda_T, newx = xT)
+coef(best_model_T)
+
+rmse_LT <- sqrt(mean((y_predicted_T - yT)^2))
+print(rmse_LT)
+
+#with weight: 109.1002
+#without weight: 109.0896
+
+```
+
+LASSO no alz
+```{r}
+set.seed(0)
+#x1 -> noalz
+#x1 -> alz
+x1 <- data.matrix(no_alz[, c("gender", "weight", "bpsys", "hrate", "bpdias", "height", "age")])
+
+#naccicv ~ gender + weight + bpsys + hrate + bpdias + motsev + height + appsev + age
+
+#naccicv ~ height + gender + weight + motsev + hrate + bpsys + bpdias + age + appsev
+
+#c("bpsys", "bpdias", "hrate", "motsev", "height", "weight", "age", "appsev")
+#c("diagnosis","female","csfvol", "lhippo", "rhippo", "frcort", "lparcort", "rparcort", "ltempcor", "rtempcor", "lcac", "rcac", "lent", "rent", "lparhip", "rparhip", "lposcin", "rposcin", "animals", "traila", "trailb", "digif", "memunits", "naccmmse", "travel", "remdates", "payattn", "mealprep", "events", "shopping", "games", "stove", "shopping", "bills", "taxes", "appsev", "nitesev", "motsev", "irrsev", "disnsev", "apasev", "elatsev", "anxsev", "depdsev", "agitsev", "hallsev", "delsev", "naccgds", "cdrglob", "bpsys", "bpdias", "height", "weight", "hrate")
+y1 <- no_alz$naccicv
+
+cv_model_1 <- cv.glmnet(x1, y1, alpha = 1)
+plot(cv_model_1)
+
+best_lambda_1 <- cv_model_1$lambda.min
+best_lambda_1
+
+best_model_1 <- glmnet(x1, y1, alpha = 1, lambda = best_lambda_1)
+coef(best_model_1)
+
+#prediction
+#using fitted best model to make predictions
+y_predicted_1 <- predict(best_model_1, s = best_lambda_1, newx = x1)
+
+#contigency_table_1 <- table(c(df$csfvol, df$naccicv))
+#chisq.test(contigency_table_1)
+
+LSO_noalz <- sqrt(mean((y_predicted_1 - y1)^2))
+print(LSO_noalz)
+
+#sst and sse
+#sst <- sum((y - mean(y))^2)
+#sse <- sum((y_predicted - y)^2)
+
+#r^2
+#rsq <- 1 - sse/sst
+#rsq
+
+#sqrtMSE = 108.8151 with set seed 0
+#sqrtMSE = 
+
+#sqrtMSE = 102.3397 with set seed 0, no alz data
+#102.7075
+```
+LASSO w/ alz
+```{r}
+set.seed(0)
+#x1 -> noalz
+#x1 -> alz
+#x2 <- data.matrix(alz_true[, c("gender","bpsys", "bpdias", "hrate", "motsev", "height", "weight", "appsev", "age", "traila", "trailb", "travel", "mealprep", "shopping", "bills", "taxes", "naccmmse", "games")])
+
+x2 <- data.matrix(alz_true[, c("gender", "weight", "bpsys", "hrate", "bpdias", "height", "age")])
+
+#c("bpsys", "bpdias", "hrate", "motsev", "height", "weight", "age", "appsev")
+#c("diagnosis","female","csfvol", "lhippo", "rhippo", "frcort", "lparcort", "rparcort", "ltempcor", "rtempcor", "lcac", "rcac", "lent", "rent", "lparhip", "rparhip", "lposcin", "rposcin", "animals", "traila", "trailb", "digif", "memunits", "naccmmse", "travel", "remdates", "payattn", "mealprep", "events", "shopping", "games", "stove", "shopping", "bills", "taxes", "appsev", "nitesev", "motsev", "irrsev", "disnsev", "apasev", "elatsev", "anxsev", "depdsev", "agitsev", "hallsev", "delsev", "naccgds", "cdrglob", "bpsys", "bpdias", "height", "weight", "hrate")
+y2 <- alz_true$naccicv
+
+cv_model_2 <- cv.glmnet(x2, y2, alpha = 1)
+plot(cv_model_2)
+
+best_lambda_2 <- cv_model_2$lambda.min
+best_lambda_2
+
+best_model_2 <- glmnet(x2, y2, alpha = 1, lambda = best_lambda_2)
+coef(best_model_2)
+
+#prediction
+#using fitted best model to make predictions
+y_predicted_2 <- predict(best_model_2, s = best_lambda_2, newx = x2)
+
+#contigency_table_1 <- table(c(df$csfvol, df$naccicv))
+#chisq.test(contigency_table_1)
+
+LSO_alz <- sqrt(mean((y_predicted_2 - y2)^2))
+print(LSO_alz)
+
+#sst and sse
+#sst <- sum((y - mean(y))^2)
+#sse <- sum((y_predicted - y)^2)
+
+#r^2
+#rsq <- 1 - sse/sst
+#rsq
+
+#MSE = 111.3087 with alzheimer symptomatic
+#mse = 110.8086. 110.6141 for alzheimer with game too
+
+#MSE = 110.4396
+
+```
+
+Neural Net
+```{r}
+#factorization (will need to manually change a few)
+alzheimer_data <- alzheimer_data %>% mutate_if(is.character, as.factor)
+alzheimer_data$diagnosis <- as.factor(alzheimer_data$diagnosis)
+#alzheimer_data$gender <- as.factor(alzheimer_data$gender)
+
+#alzheimer_data$gender
+#got baited by yang, this method of normalization seems to be what is creating the problem in the first place.
+alzheimer_data <- alzheimer_data %>% mutate(hrate_normalized = scale(alzheimer_data$hrate))
+alzheimer_data <- alzheimer_data %>% mutate(bpsys_normalized = scale(alzheimer_data$bpsys))
+alzheimer_data <- alzheimer_data %>% mutate(bpdias_normalized = scale(alzheimer_data$bpdias))
+alzheimer_data <- alzheimer_data %>% mutate(height_normalized = scale(alzheimer_data$height))
+alzheimer_data <- alzheimer_data %>% mutate(weight_normalized = scale(alzheimer_data$weight))
+alzheimer_data <- alzheimer_data %>% mutate(motsev_normalized = scale(alzheimer_data$motsev))
+alzheimer_data <- alzheimer_data %>% mutate(gender_normalized = scale(alzheimer_data$gender))
+alzheimer_data <- alzheimer_data %>% mutate(traila_normalized = scale(alzheimer_data$traila))
+alzheimer_data <- alzheimer_data %>% mutate(naccmmse_normalized = scale(alzheimer_data$naccmmse))
+alzheimer_data <- alzheimer_data %>% mutate(age_normalized = scale(alzheimer_data$age))
+alzheimer_data <- alzheimer_data %>% mutate(appsev_normalized = scale(alzheimer_data$appsev))
+#"gender", "weight", "bpsys", "hrate", "bpdias", "height", "age"
+
+#alzheimer_data$gender <- as.numeric(alzheimer_data$gender)
+#str(alzheimer_data)
+
+#summary(alzheimer_data)
+#str(alzheimer_data)
+
+alzheimer_data <- alzheimer_data %>% mutate(flRatio = csfvol/naccicv)
+
+#alzheimer_data <- alzheimer_data %>% mutate(GMratio = (lhippo + rhippo + frcort + lparcort + rparcort + ltempcor + rtempcor + lcac + rcac + lent + rent + lparhip + rparhip + lposcin + rposcin) / naccicv)
+
+#doing grey matter
+
+
+#splits
+set.seed(0)
+data_rows <- floor(0.80 * nrow(alzheimer_data)) #select 85% of all the rows there, basically largest integer passed to it that"s still under the threshold.
+train_indices <- sample(c(1:nrow(alzheimer_data)), data_rows) #out of all the rows put into a vector, choose 85% of the rows cuz data_rows = 85%
+train_data <- alzheimer_data[train_indices,] #includes all rows after the comma, it"s kind of saying select rows here, put it into a var.
+test_data <- alzheimer_data[-train_indices,] #include all rows that weren"t selected in train_indices, results in the 15%
+
+model = neuralnet(
+  GMratio ~ weight_normalized + age_normalized + appsev_normalized + bpsys_normalized + height_normalized + bpdias_normalized + motsev_normalized,
+  data = train_data,
+  hidden = c(4, 2),#number of hidden layers, number of nodes. it shows here 1 layer with 4 nodes, another layer with 2 nodes.
+  linear.output = TRUE)
+
+plot(model, rep = "best")
+
+#testing how good the model actually is
+pred <- predict(model, test_data) 
+pred #all the same, didn"t converge, wasn"t able to explore the space. it means that it stopped
+#solution: just play with the number of layers, etc.
+#just use scale LMAO with a data frame, don"t put factors or scales into it
+
+#MSE: 10, 5, unnormalized: 17315.26, 85. it seems to not matter regardless of what I put inside.
+#MSE: 4, 2, normalized: 44.67535
+#check with Dr. Behseta. this seems too good to be true
+neuralnetRMSE <- sqrt(mean((test_data$GMratio - pred)^2))
+neuralnetRMSE
+
+dfplot <- data.frame(
+  yhat = pred,
+  yvalue = test_data$GMratio
+)
+
+ggplot(data = dfplot, aes(x = yvalue, y = yhat)) + geom_point()
+
+
+#x axis is going to be y, y component will be y-hat
+
+
+```
+Random Forest all data
+```{r}
+set.seed(1234)
+data.size.t <- dim(alzheimer_data)[1]
+
+#head(alz)
+head(alzheimer_data)
+training.size.t <- round(data.size.t * 0.8)
+training.index.t <- sample(1:data.size.t, training.size.t, replace = F)
+alz.new.t <- alzheimer_data[, c("GMratio", "bpsys", "bpdias", "height", "age", "motsev", "appsev", "weight")]
+
+  
+
+training.data.t <- alz.new.t[training.index.t,] #don't draw from whole dataset -> RF is a classifier, this likely made classification easier, which made a lot of things go poo
+testing.data.t <- alz.new.t[-training.index.t,]
+
+set.seed(123)
+
+alz_forest_t <- randomForest(GMratio~., data = training.data.t, importance = T, proximity = T)
+alz_predict <- predict(alz_forest_t, testing.data.t)
+
+rfMSE <- sqrt(mean((testing.data.t$GMratio - alz_predict)^2))
+rfMSE
+
+varImpPlot(alz_forest_t,
+           sort = T,
+           n.var = 5,
+           main = "Top 5 - Variable Importance")
+importance(alz_forest_t)
+
+min(alz_predict)
+max(alz_predict)
+
+ggplot(data = testing.data.t, aes(x = GMratio, y = alz_predict)) + geom_point(color = "pink2") + labs(x = "GMratio", y = "Predicted NACCICV", title = "Model Strength: GMratio vs Predicted by Random Forest") + theme_classic() +  theme(plot.title = element_text(face = "bold")) + geom_abline()
+# + ggpubr::stat_cor(method = "pearson", label.x = 900, label.y = 1600) +
+```
+
+Random Forest with no alz
+```{r}
+alz <- read.csv("alzheimer_data.csv")
+head(alz$naccicv,100)
+
+set.seed(1234)
+data.size_1 <- dim(no_alz)[1]
+training.size_1 <- round(data.size_1 * 0.8) #sets the sample size
+
+#a1 = seq(1, 2000, 1) #this method sequences from 1 to the data size
+#b1 = sample(a1, training.size_1, replace = F) #does the same thing, a is total popluation size, 2 is the sample size, replace = F
+alz.new_1 <- no_alz[,c("naccicv", "gender", "weight", "bpsys", "hrate", "bpdias", "height", "age")]
+alz.new_1
+#inherent problem: you sampled more data than there actually was. need to pay attention to this.
+
+#data.size <- dim(no_alz)[1]
+training.size <- round(data.size_1 * 0.8)
+training.index <- sample(1:data.size_1, training.size, replace = F)
+train.data_1 <- alz.new_1[training.index, ]
+test.data_1 <- alz.new_1[-training.index, ]
+
+#alz.new <- alz %>% 
+ # select(-one_of("id", "diagnosis", "csfvol", "frcort", "lparcort", "rparcort", "ltempcor", "rtempcor", 
+      #       "rhippo", "lcac", "lent", "lparhip", "rparhip", "lposcin", "rposcin", "lhippo", "rcac", 
+      #       "rent")) #removing all vars
+
+
+
+#train.data_1 <- alz.new_1[b1,]
+#test.data_1 <- alz.new_1[-b1,]
+
+#train.data_1$naccicv
+
+set.seed(123) #why 2 set seeds?
+
+alz.forest_1 <- randomForest(naccicv~., data = train.data_1, importance = TRUE, proximity = TRUE)
+p1 <- predict(alz.forest_1, test.data_1)
+#head(test.data)
+#head(p)
+forestMSE_1 <- mean((test.data_1$naccicv - p1)^2)
+forestRMSE_1 <- sqrt(forestMSE_1)
+forestRMSE_1
+#sqrt forestMSE with no alz = 104.5604
+#new: 98.18156
+
+varImpPlot(alz.forest_1,
+           sort = T,
+           n.var = 5,
+           main = "Top 5 - Variable Importance, Asymptomatic")
+importance(alz.forest_1)
+
+```
+Random Forest with Alzheimer
+```{r}
+alz <- read.csv("alzheimer_data.csv")
+
+set.seed(1234)
+data.size_2 <- dim(alz_true)[1]
+training_size_2 <- round(data.size_2 * 0.8)
+training_index_2 <- sample(1:data.size_2, training_size_2, replace = F)
+#a = seq(1, 2700, 1)
+#b = sample(a, 2000, replace = F)
+alz.new <- alz_true[,c("naccicv", "gender", "weight", "bpsys", "hrate", "bpdias", "height", "age")]
+
+
+
+
+
+#alz.new <- alz %>% 
+ # select(-one_of("id", "diagnosis", "csfvol", "frcort", "lparcort", "rparcort", "ltempcor", "rtempcor", 
+      #       "rhippo", "lcac", "lent", "lparhip", "rparhip", "lposcin", "rposcin", "lhippo", "rcac", 
+      #       "rent")) #removing all vars
+
+alz.new
+
+train.data_2 <- alz.new[training_index_2,]
+test.data_2 <- alz.new[-training_index_2,]
+
+set.seed(123) #why 2 set seeds?
+
+alz.forest_2 <- randomForest(naccicv~., data = train.data_2, importance = TRUE, proximity = TRUE)
+p2 <- predict(alz.forest_2, test.data_2)
+#head(test.data)
+#head(p)
+forestMSE_2 <- mean((test.data_2$naccicv - p2)^2)
+forestRMSE_2 <- sqrt(forestMSE_2)
+forestRMSE_2
+#sqrt forestMSE_2 -> 122.487
+#new: 119.9669
+#new again after accounting for stat sig: 113.8101
+
+varImpPlot(alz.forest_2,
+           sort = T,
+           n.var = 5,
+           main = "Top 5 - Variable Importance, Symptomatic")
+importance(alz.forest_2)
+
+```
+
+```{r}
+set.seed(0)
+data_split_lm_t <- initial_split(alzheimer_data, prop = 0.8)
+training_data_lm_t <- training(data_split_lm_t)
+testing_data_lm_t <- testing(data_split_lm_t)
+
+model_lm_t <- lm(GMratio ~ height + weight + bpsys + bpdias + age + motsev + appsev, data = training_data_lm_t)
+
+predict_model_lm_t <- predict(model_lm_t, newdata = testing_data_lm_t)
+
+summary(model_lm_t)
+
+LM_rmseT <- sqrt(mean((testing_data_lm_t$GMratio - predict_model_lm_t)^2))
+LM_rmseT
+
+ggplot(data = testing_data_lm_t, aes(x = testing_data_lm_t$GMratio, y = predict_model_lm_t)) + geom_point(color = "pink") + geom_smooth(method = "lm", se = FALSE, color = "black") + labs(x = "GMratio", y = "Predicted GMratio", title = "Model Strength: GMratio vs Predicted GMratio by LM") + theme_classic()
+```
+
+
+
+Trad linear model no alz
+```{r}
+set.seed(0)
+data_split_lm <- initial_split(no_alz, prop = 0.8)
+training_data_lm_1 <- training(data_split_lm)
+testing_data_lm_1 <- testing(data_split_lm)
+
+model_lm_1 <- lm(naccicv ~ height + gender + weight + hrate + bpsys + bpdias + age, data = training_data_lm_1)
+
+predict_model_lm_1 <- predict(model_lm_1, newdata = testing_data_lm_1)
+
+summary(model_lm_1)
+
+lmrmse1 <- sqrt(mean((testing_data_lm_1$naccicv - predict_model_lm_1)^2))
+
+#MSE = 110.9734
+#mse = 108.2313 with new factors added
+#MSE accounting for stat sig: 106.4526
+```
+```{r}
+set.seed(0)
+data_split_lm_2 <- initial_split(alz_true, prop = 0.8)
+training_data_lm_2 <- training(data_split_lm_2)
+testing_data_lm_2 <- testing(data_split_lm_2)
+
+model_lm_2 <- lm(naccicv ~ height + gender + weight + hrate + bpsys + bpdias + age, data = training_data_lm_2)
+
+predict_model_lm_2 <- predict(model_lm_2, newdata = testing_data_lm_2)
+
+summary(model_lm_2)
+
+lmrmse2 <- sqrt(mean((testing_data_lm_2$naccicv - predict_model_lm_2)^2))
+
+#MSE = 110.7197
+#MSE = 110.2043
+#MSE = 110.1082
+```
+
+Trad linear model k-fold cross validation, no alz
+```{r}
+set.seed(0)
+library(caret)
+ctrl <- trainControl(method = "cv",  number = 5)
+
+model_kflm <- caret::train(naccicv ~ height + gender + weight + hrate + bpsys + bpdias + age, data = no_alz, method = "lm", trControl = ctrl)
+
+print(model_kflm)
+
+#RMSE -> 106.0705 with no alzheimer data
+#RMSE -> 103.0698
+#RMSE: 102.7726
+
+#kflmrmse_1 <- 106.54
+
+model_kflm_2 <- caret::train(naccicv ~ height + gender + weight + hrate + bpsys + bpdias + age, data = alz_true, method = "lm", trControl = ctrl)
+print(model_kflm_2)
+
+#RMSE -> 112.465 with alzheimer_true data
+#RMSE -> 112.4894
+#RMSE -> 111.9686
+
+#kflmrmse_2 <- 112.4713
+
+model_kflm_tot <- caret::train(GMratio ~ height + weight + bpsys + bpdias + age + motsev + appsev, data = alzheimer_data, method = "lm", trControl = ctrl)
+print(model_kflm_tot)
+
+kflmrmse_t <- 0.02202172
+
+```
+
+new plot with MSE and all that shit
+```{r}
+#could do number of parameters and the MSE as a result, or could do optimal MSE with standardized vars, which could be the best solution honestly.
+
+#could also do a bar graph of which one had the best MSE optimizing for the same variables. could play around with it today ngl
+
+
+Method <- c(rep("LM", 1), rep("LM + K-fold", 1), rep("neuralnet", 1), rep("Lasso", 1), rep("RF", 1)) #this seems to go alphabetical when it graphs
+#Populations <- rep(c("Not Symptomatic", "Symptomatic"), 5) #replicates 4 times, accross the entire 4 ranges that I use.
+Values <- c(round(LM_rmseT, 6), round(kflmrmse_t, 6), round(neuralnetRMSE, 6), round(rmse_LT, 6), round(rfMSE, 6))
+data <- data.frame(Method, Values)
+
+print(Values)
+
+
+
+#lmrmse1
+#lmrmse2
+#kflmrmse_1
+#kflmrmse_2
+#LSO_noalz
+#LSO_alz
+#121.20221755010301
+#124.0264155646389
+#forestRMSE_1
+#forestRMSE_2
+
+#ggplot(data, aes(x = Method, y = Values, fill = Populations)) + geom_bar(stat = "identity", position = "dodge") + labs(x = "Model", y = "RMSE", title = "Comparing performance of different models") + scale_fill_manual(values = c("black", "pink"))
+
+#stat = identity tells r to use the value you provide for Y
+
+ggplot(data, aes(x = Method, y = Values)) + geom_bar(stat = "identity", fill = "pink") + labs(x = "Model", y = "RMSE", title = "Comparing performance of different models") + geom_text(aes(label = Values))
+
+ggplot(data = alzheimer_data, aes(x = height, y = naccicv)) + geom_point(color = "pink") + geom_smooth(method = "lm", color = "black") + labs(x = "Height(in)", y = "NACCICV(CC)", title = "Height vs NACCICV")
+
+ggplot(data = alzheimer_data, aes(x = weight, y = naccicv)) + geom_point(color = "pink") + geom_smooth(method = "lm", color = "black") + labs(x = "Weight(lbs)", y = "NACCICV(CC)", title = "Weight vs NACCICV")
+
+ggplot(data = alzheimer_data, aes(x = weight, y = naccicv)) + geom_point(color = "pink") + geom_smooth(method = "lm", color = "black") + labs(x = "Weight(lbs)", y = "NACCICV(CC)", title = "Weight vs NACCICV")
+
+ggplot(data = alzheimer_data, aes(x = age, y = naccicv)) + geom_point(color = "pink") + geom_smooth(method = "lm", color = "black") + labs(x = "Age", y = "NACCICV(CC)", title = "Age vs NACCICV")
+
+ggplot(data = alzheimer_data, aes(x = bpsys, y = naccicv)) + geom_point(color = "pink") + geom_smooth(method = "lm", color = "black") + labs(x = "Systolic Blood Pressure", y = "NACCICV(CC)", title = "BPSYS vs NACCICV")
+
+
+```
+
+Chisq tests
+```{r}
+contingencytable.1 <- table(alzheimer_data$naccicv, alzheimer_data$height)
+contingencytable.2 <- table(alzheimer_data$naccicv, alzheimer_data$gender)
+contingencytable.3 <- table(alzheimer_data$naccicv, alzheimer_data$motsev)
+contingencytable.4 <- table(alzheimer_data$naccicv, alzheimer_data$hrate)
+contingencytable.5 <- table(alzheimer_data$naccicv, alzheimer_data$bpsys)
+contingencytable.6 <- table(alzheimer_data$naccicv, alzheimer_data$bpdias)
+contingencytable.7 <- table(alzheimer_data$naccicv, alzheimer_data$trailb)
+```
+
+T-tests
+```{r}
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$height)$p.value, 4)
+#round(cor.test(no_alz$naccicv, no_alz$height)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$height)$p.value, 4)
+
+#round(cor.test(alzheimer_data$GMratio, alzheimer_data$gender)$p.value, 4)
+#0.1344
+#round(cor.test(no_alz$naccicv, no_alz$gender)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$gender)$p.value, 4)
+
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$weight)$p.value, 4)
+#round(cor.test(no_alz$naccicv, no_alz$weight)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$weight)$p.value, 4)
+
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$motsev)$p.value, 4) #0.1315, no correlation, check
+#round(cor.test(no_alz$naccicv, no_alz$motsev)$p.value, 4) #0.1425, no correlation, check.
+#round(cor.test(alz_true$naccicv, alz_true$motsev)$p.value, 4) #0.1603, no correlation, checked. delete from model, no use
+
+#round(cor.test(alzheimer_data$GMratio, alzheimer_data$hrate)$p.value, 4) #0.1344
+#round(cor.test(no_alz$naccicv, no_alz$hrate)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$hrate)$p.value, 4) #0.0592
+
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$bpsys)$p.value, 4)
+#round(cor.test(no_alz$naccicv, no_alz$bpsys)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$bpsys)$p.value, 4)
+
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$bpdias)$p.value, 4)
+#round(cor.test(no_alz$naccicv, no_alz$bpdias)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$bpdias)$p.value, 4) #0.4391 (HOW)
+
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$age)$p.value, 4)
+#round(cor.test(no_alz$naccicv, no_alz$age)$p.value, 4)
+#round(cor.test(alz_true$naccicv, alz_true$age)$p.value, 4)
+
+round(cor.test(alzheimer_data$GMratio, alzheimer_data$appsev)$p.value, 4) #0.2131, no sig correlation, check
+#round(cor.test(no_alz$naccicv, no_alz$appsev)$p.value, 4) #0.1542
+#round(cor.test(alz_true$naccicv, alz_true$appsev)$p.value, 4) #0.3087
+
+
+
+t.test(alz_true$naccicv, no_alz$naccicv) #p-value is 0.2978, there seems to be no statistical significance. This seems to be a slight problem. Just know that ig blocking happens before???? and also this isn't a sample, it's just the raw data.
+?t.test
+alzheimer_data$alz_sym <- as.factor(alzheimer_data$alz_sym)
+
+?lm
+ggplot(data = alzheimer_data, aes(x = height, y = naccicv, color = alz_sym)) + geom_point() + geom_smooth(method = "lm") + scale_color_manual(values=c("black","pink2")) + labs(x = "Height(inches)", y = "NACCICV(cc)", title = "Height vs Total Intracranial Volume", color = "Condition")
+
+ggplot(data = alzheimer_data, aes(x = weight, y = naccicv, color = alz_sym)) + geom_point() + geom_smooth(method = "lm") + scale_color_manual(values=c("black","pink2")) + labs(x = "Weight(lbs)", y = "NACCICV(cc)", title = "Weight vs Total Intracranial Volume", color = "Condition")
+
+ggplot(data = alzheimer_data, aes(x = age, y = naccicv, color = alz_sym)) + geom_point() + geom_smooth(method = "lm") + scale_color_manual(values=c("black","pink2")) + labs(x = "Age", y = "NACCICV(cc)", title = "Age vs Total Intracranial Volume", color = "Condition")
+
+ggplot(data = alzheimer_data, aes(x = bpsys, y = naccicv, color = alz_sym)) + geom_point() + geom_smooth(method = "lm") + scale_color_manual(values=c("black","pink2")) + labs(x = "Systolic Blood Pressure(mmHg)", y = "NACCICV(cc)", title = "Systolic Blood Pressure vs Total Intracranial Volume", color = "Condition")
+
+ggplot(data = alzheimer_data, aes(x = age, y = GMratio)) + geom_point(color = "pink1") + geom_smooth(method = "lm", color = "black") + labs(x = "Age", y = "Grey Matter Ratio", title = "Age vs Grey Matter Ratio") + theme_classic()
+
+ggplot(data = alzheimer_data, aes(x = weight, y = GMratio)) + geom_point(color = "pink1") + geom_smooth(method = "lm", color = "black") + labs(x = "Weight(lbs)", y = "Grey Matter Ratio", title = "Weight vs Grey Matter Ratio") + theme_classic()
+
+```
+
+``` {r}
+ggplot(data = alzheimer_data, aes(x = height, y = weight)) + geom_point(color = "forestgreen")
+```
